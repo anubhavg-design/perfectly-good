@@ -1,0 +1,117 @@
+{
+  "theme": "light",
+  "archetype": "1 (Organic & Earthy)",
+  "colors": {
+    "primary": "#2E7D32",
+    "primary_hover": "#205a22",
+    "background": "#FDFBF7",
+    "surface": "#FFFFFF",
+    "surface_secondary": "#F4F1EA",
+    "text_primary": "#1A2E1A",
+    "text_secondary": "#4A5D4E",
+    "accent_urgent": "#C65D47",
+    "accent_success": "#2E7D32",
+    "border": "#E5E2DA"
+  },
+  "typography": {
+    "fonts": {
+      "heading": "Outfit, sans-serif",
+      "body": "DM Sans, sans-serif"
+    },
+    "scale": {
+      "h1": "text-3xl tracking-tight font-medium",
+      "h2": "text-2xl tracking-tight font-medium",
+      "h3": "text-lg font-medium",
+      "body": "text-base leading-relaxed",
+      "small": "text-sm",
+      "overline": "text-xs uppercase tracking-[0.2em]"
+    }
+  },
+  "layout": {
+    "spacing_scale": "Tailwind default extended with generous padding",
+    "container": "w-full max-w-md mx-auto min-h-screen relative pb-24 bg-[#FDFBF7]",
+    "border_radius": {
+      "card": "rounded-2xl",
+      "button": "rounded-xl",
+      "image": "rounded-t-2xl",
+      "badge": "rounded-full"
+    }
+  },
+  "components": {
+    "card": {
+      "background": "bg-white",
+      "border": "border border-[#E5E2DA]",
+      "shadow": "shadow-sm hover:shadow-md transition-shadow",
+      "padding": "p-0 overflow-hidden",
+      "description": "Use cardless or soft-edged container for food drops. If using cards, use a 1px border instead of heavy shadows."
+    },
+    "button_primary": {
+      "background": "bg-[#2E7D32]",
+      "text": "text-white font-medium",
+      "padding": "py-3.5 px-6",
+      "states": "hover:bg-[#205a22] active:scale-[0.98] transition-all"
+    },
+    "bottom_nav": {
+      "background": "bg-white/80 backdrop-blur-xl border-t border-[#E5E2DA]",
+      "layout": "fixed bottom-0 left-0 right-0 max-w-md mx-auto flex justify-around items-center px-4 py-3 z-50 shadow-[0_-4px_24px_rgba(0,0,0,0.04)]",
+      "icon_color": "text-[#4A5D4E] data-[active=true]:text-[#2E7D32]"
+    },
+    "badge_floating": {
+      "background": "bg-white/90 backdrop-blur-md",
+      "text": "text-[#1A2E1A] text-xs font-medium",
+      "layout": "absolute px-3 py-1.5 rounded-full flex items-center gap-1.5 shadow-sm"
+    },
+    "countdown_timer": {
+      "background": "bg-[#C65D47]/10",
+      "text": "text-[#C65D47] font-medium text-sm",
+      "layout": "flex items-center gap-1.5 px-3 py-1.5 rounded-full"
+    }
+  },
+  "motion": {
+    "hover": "transition-all duration-200 ease-out",
+    "page_transition": "animate-in fade-in slide-in-from-bottom-4 duration-300 ease-out"
+  },
+  "image_urls": {
+    "drops": [
+      {
+        "url": "https://images.unsplash.com/photo-1763207291707-e2cf471ed72b?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NTY2OTV8MHwxfHNlYXJjaHwxfHxmcmVzaCUyMGFydGlzYW4lMjBwYXN0cnklMjBiYWtlcnl8ZW58MHx8fHwxNzc1ODk0OTE1fDA&ixlib=rb-4.1.0&q=85",
+        "description": "Artisan pastries from local bakery",
+        "category": "food_item"
+      },
+      {
+        "url": "https://images.unsplash.com/photo-1632898657999-ae6920976661?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjAzMjV8MHwxfHNlYXJjaHw0fHxnb3VybWV0JTIwYnVyZ2VyJTIwYW5kJTIwZnJpZXN8ZW58MHx8fHwxNzc1ODk0OTE1fDA&ixlib=rb-4.1.0&q=85",
+        "description": "Gourmet burger and fries",
+        "category": "food_item"
+      },
+      {
+        "url": "https://images.unsplash.com/photo-1636425732174-8700a53e8dd4?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NTY2NzR8MHwxfHNlYXJjaHwzfHxmcmVzaCUyMHN1c2hpJTIwYm94fGVufDB8fHx8MTc3NTg5NDkxNXww&ixlib=rb-4.1.0&q=85",
+        "description": "Fresh sushi box",
+        "category": "food_item"
+      },
+      {
+        "url": "https://images.unsplash.com/photo-1662714208483-3480ccd2de39?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NDk1NzZ8MHwxfHNlYXJjaHwzfHxoZWFsdGh5JTIwc2FsYWQlMjBib3dsfGVufDB8fHx8MTc3NTg5NDkxOXww&ixlib=rb-4.1.0&q=85",
+        "description": "Healthy salad bowl",
+        "category": "food_item"
+      }
+    ],
+    "restaurants": [
+      {
+        "url": "https://images.unsplash.com/photo-1752754331999-a20ee211ec20?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NTY2NzV8MHwxfHNlYXJjaHwxfHxyZXN0YXVyYW50JTIwc3RvcmVmcm9udCUyMGV4dGVyaW9yfGVufDB8fHx8MTc3NTg5NDkxNXww&ixlib=rb-4.1.0&q=85",
+        "description": "Restaurant storefront",
+        "category": "storefront"
+      }
+    ]
+  },
+  "instructions_to_main_agent": [
+    "Use Outfit for all headings and DM Sans for body text to give a fresh, organic, modern feel. DO NOT use Inter for headings.",
+    "Since this is a mobile-first app, wrap the main layout in a centered container: `max-w-md mx-auto min-h-screen bg-[#FDFBF7]`.",
+    "Food cards should be highly visual: large cover images (max-h-48), with badges floating over the image (e.g., '1.2 km away' or '4 left!'). Use object-cover for all images.",
+    "Use Phosphor Icons (`@phosphor-icons/react`) for sharp, premium iconography.",
+    "Implement a fixed bottom navigation bar with crystal glassmorphism (`backdrop-blur-xl bg-white/80 border-t border-[#E5E2DA]`).",
+    "Use `#C65D47` (terracotta) for urgency elements like countdown timers and 'strikethrough' original prices.",
+    "Ensure the checkout flow feels frictionless: large, tap-friendly buttons, clear price breakdowns.",
+    "ALL interactive elements and critical data containers MUST have a `data-testid` attribute (e.g., `data-testid='reserve-button'`, `data-testid='drop-card'`).",
+    "Install required icon package: `yarn add @phosphor-icons/react`.",
+    "Do NOT use HTML native components for advanced interactions. Use Shadcn customized for mobile."
+  ]
+}
