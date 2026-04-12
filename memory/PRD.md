@@ -1,70 +1,53 @@
 # Perfectly Good - Product Requirements Document
 
 ## Problem Statement
-Build a full-stack mobile-first web application called "Perfectly Good" — a surplus food marketplace where users can discover and reserve discounted food from nearby restaurants to reduce food waste.
+Build a full-stack mobile-first web app "Perfectly Good" — surplus food marketplace reducing food waste.
 
 ## Architecture
 - **Frontend**: React 19 + Tailwind CSS + Shadcn UI + Phosphor Icons
-- **Backend**: FastAPI (Python) with Motor (async MongoDB driver)
+- **Backend**: FastAPI + Motor (async MongoDB)
 - **Database**: MongoDB
-- **Payments**: Razorpay (test mode)
-- **Auth**: Email/password with JWT (access + refresh tokens, httpOnly cookies)
-- **Storage**: Emergent Object Storage for food images
-- **Design**: Mobile-first, Organic & Earthy theme (#2E7D32 primary, #FDFBF7 background)
-
-## User Personas
-1. **Consumer** — discovers nearby food drops, reserves items, pays via Razorpay
-2. **Vendor** — lists surplus food items ("drops"), manages inventory & orders
-3. **Admin** — seeded on startup, can access all features
+- **Payments**: Razorpay + 5% convenience fee
+- **Auth**: Email/password JWT (httpOnly cookies)
+- **Storage**: Emergent Object Storage
 
 ## What's Been Implemented (April 12, 2026)
 
-### Phase 1 (MVP)
-- [x] Email/password JWT authentication (register, login, logout, refresh, /me)
-- [x] Admin seeding on startup
-- [x] Brute force protection
-- [x] Home feed with geolocation-based sorting
-- [x] Drop detail page
-- [x] Razorpay checkout integration
-- [x] Order creation and payment verification
-- [x] Quantity reduction on order placement
-- [x] Order history (user + vendor)
-- [x] Vendor creation flow ("Become a Vendor" modal)
-- [x] Vendor dashboard with CRUD on drops
-- [x] Image upload via Emergent Object Storage
-- [x] Toggle drop active/inactive
-- [x] Countdown timer for pickup windows
-- [x] Bottom navigation (context-aware for user/vendor roles)
-- [x] Profile page with role display
-- [x] Mobile-first UI with Outfit + DM Sans fonts, organic theme
+### Phase 1 — MVP
+- [x] Email/password JWT auth with brute force protection
+- [x] Home feed with geolocation sorting, food cards with images
+- [x] Drop detail page, Razorpay checkout, order history
+- [x] Vendor creation, dashboard, drop CRUD, image upload
+- [x] Bottom nav (context-aware), Profile page
 
-### Phase 2 (Iteration 2)
-- [x] Order status management — vendor marks orders as picked_up or cancelled
-- [x] Cancelled orders restore quantity to food item
-- [x] Search/filter on home feed — text search, category, max price, sort by price/discount/distance
-- [x] Category chips filter UI
-- [x] GET /api/drops/categories endpoint
-- [x] Password reset flow — forgot-password + reset-password with token
-- [x] Order expiry — background task auto-expires reserved orders after 4 hours, restores quantity
-- [x] Expired order status shown in user order history
-- [x] 8 dummy food drops seeded across 4 vendor categories (Bakery, Restaurant, Cafe, Grocery)
-- [x] Demo vendor account (vendor@demo.com / vendor123)
+### Phase 2 — Features
+- [x] Search/filter: text search, category, max price, sort by
+- [x] Order status management: vendor marks picked_up/cancelled
+- [x] Password reset flow
+- [x] Order expiry (background task, 4hr window)
+- [x] 8 demo food drops across 4 vendors
+
+### Phase 3 — Admin & Business Model
+- [x] Admin panel (/admin) for vendor onboarding
+- [x] Admin creates vendor accounts with login credentials
+- [x] Admin uploads full menu (items + photos + original prices)
+- [x] Vendors pick from pre-loaded menu to create drops
+- [x] Vendors only set: discounted price, quantity, pickup window
+- [x] 5% convenience fee on checkout (covers payment processing)
+- [x] Admin role enforced on every startup
 
 ## Prioritized Backlog
-### P1 (Important)
-- Push/email notifications for order status changes
-- Real-time quantity updates via WebSockets
-- User reviews/ratings for vendors
-- Favourite vendors list
+### P1
+- Push notifications for order status changes
+- Map view for drop discovery
+- User reviews & ratings
 
-### P2 (Nice to Have)
-- Admin panel for managing all vendors
-- Order cancellation by user (before pickup)
-- Map view for nearby drops
-- Share drops on WhatsApp/social media
+### P2
+- Email integration for password reset (currently token-based)
+- Share drops via WhatsApp
+- Analytics dashboard for admin
 
 ## Next Tasks
-1. Push notifications for order status changes
-2. Map view for drop discovery
-3. User reviews and ratings
-4. Share drops via social media
+1. Send email for password reset (currently returns token)
+2. Map view for nearby drops
+3. User ratings for vendors
