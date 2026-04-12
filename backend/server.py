@@ -945,6 +945,12 @@ async def seed_admin():
         await db.users.update_one({"email": admin_email}, {"$set": update_fields})
         logger.info("Admin user role enforced")
 
+    # Also enforce admin role for anubhavg
+    anubhav = await db.users.find_one({"email": "anubhavg@perfectlygood.in"}, {"_id": 0})
+    if anubhav:
+        await db.users.update_one({"email": "anubhavg@perfectlygood.in"}, {"$set": {"role": "admin"}})
+        logger.info("anubhavg@perfectlygood.in admin role enforced")
+
 async def seed_demo_data():
     """Seed dummy vendors and food items for testing."""
     # Check if already seeded
