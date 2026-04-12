@@ -527,6 +527,9 @@ async def admin_upload_image(file: UploadFile = File(...), request: Request = No
 async def create_vendor(vendor_data: VendorCreate, request: Request):
     current_user = await get_current_user(request)
 
+    if current_user.get("role") == "admin":
+        raise HTTPException(status_code=400, detail="Admin users should use the admin panel to create vendors")
+
     existing_vendor = await db.vendors.find_one({"user_id": current_user["user_id"]}, {"_id": 0})
     if existing_vendor:
         raise HTTPException(status_code=400, detail="Vendor already exists for this user")
@@ -934,12 +937,13 @@ async def seed_admin():
             "created_at": datetime.now(timezone.utc).isoformat()
         })
         logger.info(f"Admin user seeded: {admin_email}")
-    elif not verify_password(admin_password, existing.get("password_hash", "")):
-        await db.users.update_one(
-            {"email": admin_email},
-            {"$set": {"password_hash": hash_password(admin_password)}}
-        )
-        logger.info("Admin password updated")
+    else:
+        # Always enforce admin role and password
+        update_fields = {"role": "admin"}
+        if not verify_password(admin_password, existing.get("password_hash", "")):
+            update_fields["password_hash"] = hash_password(admin_password)
+        await db.users.update_one({"email": admin_email}, {"$set": update_fields})
+        logger.info("Admin user role enforced")
 
 async def seed_demo_data():
     """Seed dummy vendors and food items for testing."""
