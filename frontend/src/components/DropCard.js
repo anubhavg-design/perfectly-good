@@ -15,7 +15,7 @@ function DropCard({ drop, onClick }) {
       <div className="relative h-48 bg-[#F4F1EA]">
         {drop.image_url ? (
           <img
-            src={`${process.env.REACT_APP_BACKEND_URL}${drop.image_url}`}
+            src={drop.image_url.startsWith("http") ? drop.image_url : `${process.env.REACT_APP_BACKEND_URL}${drop.image_url}`}
             alt={drop.name}
             className="w-full h-full object-cover"
           />

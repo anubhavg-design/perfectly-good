@@ -19,6 +19,8 @@ import razorpay
 import math
 import bcrypt
 import jwt
+import secrets
+import asyncio
 
 # MongoDB connection
 mongo_url = os.environ['MONGO_URL']
@@ -140,6 +142,16 @@ class VendorCreate(BaseModel):
     name: str
     location: dict
     category: str
+
+class OrderStatusUpdate(BaseModel):
+    status: str  # "picked_up" or "cancelled"
+
+class ForgotPasswordInput(BaseModel):
+    email: str
+
+class ResetPasswordInput(BaseModel):
+    token: str
+    new_password: str
 
 # ---------- Auth Helper ----------
 
@@ -302,6 +314,50 @@ async def refresh_token(request: Request):
     except jwt.InvalidTokenError:
         raise HTTPException(status_code=401, detail="Invalid refresh token")
 
+# ---------- Password Reset ----------
+
+@api_router.post("/auth/forgot-password")
+async def forgot_password(data: ForgotPasswordInput):
+    email = data.email.strip().lower()
+    user = await db.users.find_one({"email": email}, {"_id": 0})
+    if not user:
+        # Return success even if email not found (security)
+        return {"message": "If an account exists with that email, a reset link has been sent."}
+
+    token = secrets.token_urlsafe(32)
+    await db.password_reset_tokens.insert_one({
+        "token": token,
+        "user_id": user["user_id"],
+        "email": email,
+        "expires_at": (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat(),
+        "used": False,
+        "created_at": datetime.now(timezone.utc).isoformat()
+    })
+
+    # In production, send email. For now log to console & return token for testing.
+    logger.info(f"Password reset token for {email}: {token}")
+    return {"message": "If an account exists with that email, a reset link has been sent.", "reset_token": token}
+
+@api_router.post("/auth/reset-password")
+async def reset_password(data: ResetPasswordInput):
+    record = await db.password_reset_tokens.find_one({"token": data.token, "used": False}, {"_id": 0})
+    if not record:
+        raise HTTPException(status_code=400, detail="Invalid or expired reset token")
+
+    expires_at = record["expires_at"]
+    if isinstance(expires_at, str):
+        expires_at = datetime.fromisoformat(expires_at)
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=timezone.utc)
+    if expires_at < datetime.now(timezone.utc):
+        raise HTTPException(status_code=400, detail="Reset token has expired")
+
+    new_hash = hash_password(data.new_password)
+    await db.users.update_one({"user_id": record["user_id"]}, {"$set": {"password_hash": new_hash}})
+    await db.password_reset_tokens.update_one({"token": data.token}, {"$set": {"used": True}})
+
+    return {"message": "Password reset successfully"}
+
 # ---------- Vendor Endpoints ----------
 
 @api_router.post("/vendor/create")
@@ -388,6 +444,37 @@ async def get_vendor_orders(request: Request):
     orders = await db.orders.find({"vendor_id": vendor["vendor_id"]}, {"_id": 0}).sort("created_at", -1).to_list(1000)
     return orders
 
+@api_router.put("/vendor/orders/{order_id}/status")
+async def update_order_status(order_id: str, data: OrderStatusUpdate, request: Request):
+    current_user = await get_current_user(request)
+    vendor = await db.vendors.find_one({"user_id": current_user["user_id"]}, {"_id": 0})
+    if not vendor:
+        raise HTTPException(status_code=403, detail="User is not a vendor")
+
+    if data.status not in ["picked_up", "cancelled"]:
+        raise HTTPException(status_code=400, detail="Invalid status. Must be 'picked_up' or 'cancelled'")
+
+    order = await db.orders.find_one({"order_id": order_id, "vendor_id": vendor["vendor_id"]}, {"_id": 0})
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+
+    if order["status"] not in ["reserved"]:
+        raise HTTPException(status_code=400, detail=f"Cannot change status from '{order['status']}'")
+
+    update_fields = {"status": data.status, "updated_at": datetime.now(timezone.utc).isoformat()}
+
+    # If cancelled, restore quantity
+    if data.status == "cancelled":
+        item = await db.food_items.find_one({"item_id": order["food_item_id"]}, {"_id": 0})
+        if item:
+            await db.food_items.update_one(
+                {"item_id": order["food_item_id"]},
+                {"$inc": {"quantity_available": order["quantity"]}}
+            )
+
+    await db.orders.update_one({"order_id": order_id}, {"$set": update_fields})
+    return {"message": f"Order marked as {data.status}"}
+
 @api_router.post("/vendor/upload")
 async def upload_image(file: UploadFile = File(...), request: Request = None):
     current_user = await get_current_user(request)
@@ -416,8 +503,17 @@ async def upload_image(file: UploadFile = File(...), request: Request = None):
 # ---------- Drops Endpoints ----------
 
 @api_router.get("/drops")
-async def get_drops(lat: Optional[float] = Query(None), lon: Optional[float] = Query(None)):
-    items = await db.food_items.find({"is_active": True, "quantity_available": {"$gt": 0}}, {"_id": 0}).to_list(1000)
+async def get_drops(
+    lat: Optional[float] = Query(None),
+    lon: Optional[float] = Query(None),
+    search: Optional[str] = Query(None),
+    category: Optional[str] = Query(None),
+    max_price: Optional[float] = Query(None),
+    max_distance: Optional[float] = Query(None),
+    sort_by: Optional[str] = Query(None),  # "price", "distance", "discount"
+):
+    query = {"is_active": True, "quantity_available": {"$gt": 0}}
+    items = await db.food_items.find(query, {"_id": 0}).to_list(1000)
 
     result = []
     for item in items:
@@ -425,7 +521,23 @@ async def get_drops(lat: Optional[float] = Query(None), lon: Optional[float] = Q
         if not vendor:
             continue
 
-        food_item = {**item, "vendor_name": vendor["name"], "vendor_location": vendor["location"]}
+        # Category filter
+        if category and vendor.get("category", "").lower() != category.lower():
+            continue
+
+        # Search filter
+        if search:
+            search_lower = search.lower()
+            if (search_lower not in item["name"].lower()
+                and search_lower not in item.get("description", "").lower()
+                and search_lower not in vendor["name"].lower()):
+                continue
+
+        # Price filter
+        if max_price and item["discounted_price"] > max_price:
+            continue
+
+        food_item = {**item, "vendor_name": vendor["name"], "vendor_location": vendor["location"], "vendor_category": vendor.get("category", "")}
 
         if lat is not None and lon is not None and vendor.get("location"):
             vendor_lat = vendor["location"].get("lat")
@@ -434,12 +546,27 @@ async def get_drops(lat: Optional[float] = Query(None), lon: Optional[float] = Q
                 distance = calculate_distance(lat, lon, vendor_lat, vendor_lon)
                 food_item["distance"] = round(distance, 1)
 
+        # Distance filter
+        if max_distance and food_item.get("distance") is not None and food_item["distance"] > max_distance:
+            continue
+
         result.append(food_item)
 
-    if lat is not None and lon is not None:
+    # Sorting
+    if sort_by == "price":
+        result.sort(key=lambda x: x.get("discounted_price", float('inf')))
+    elif sort_by == "discount":
+        result.sort(key=lambda x: -(x.get("original_price", 0) - x.get("discounted_price", 0)))
+    elif lat is not None and lon is not None:
         result.sort(key=lambda x: x.get("distance", float('inf')))
 
     return result
+
+@api_router.get("/drops/categories")
+async def get_categories():
+    vendors = await db.vendors.find({}, {"_id": 0, "category": 1}).to_list(1000)
+    categories = list(set(v["category"] for v in vendors if v.get("category")))
+    return categories
 
 @api_router.get("/drops/{item_id}")
 async def get_drop_detail(item_id: str, lat: Optional[float] = Query(None), lon: Optional[float] = Query(None)):
@@ -601,6 +728,129 @@ async def seed_admin():
         )
         logger.info("Admin password updated")
 
+async def seed_demo_data():
+    """Seed dummy vendors and food items for testing."""
+    # Check if already seeded
+    existing_vendors = await db.vendors.count_documents({})
+    if existing_vendors > 0:
+        logger.info("Demo data already exists, skipping seed")
+        return
+
+    # Create demo vendor user
+    vendor_user_id = f"user_{uuid.uuid4().hex[:12]}"
+    await db.users.update_one(
+        {"email": "vendor@demo.com"},
+        {"$set": {
+            "user_id": vendor_user_id,
+            "email": "vendor@demo.com",
+            "name": "Demo Vendor",
+            "password_hash": hash_password("vendor123"),
+            "role": "vendor",
+            "picture": None,
+            "location": None,
+            "created_at": datetime.now(timezone.utc).isoformat()
+        }},
+        upsert=True
+    )
+
+    demo_vendors = [
+        {"name": "Green Leaf Bakery", "category": "Bakery", "location": {"lat": 28.6139, "lon": 77.2090, "address": "Connaught Place, Delhi"}},
+        {"name": "Spice Garden", "category": "Restaurant", "location": {"lat": 28.6280, "lon": 77.2197, "address": "Karol Bagh, Delhi"}},
+        {"name": "Fresh Bowl Cafe", "category": "Cafe", "location": {"lat": 28.5355, "lon": 77.2100, "address": "Saket, Delhi"}},
+        {"name": "Daily Grocers", "category": "Grocery Store", "location": {"lat": 28.6448, "lon": 77.2167, "address": "Rajender Nagar, Delhi"}},
+    ]
+
+    image_urls = [
+        "https://images.unsplash.com/photo-1763207291707-e2cf471ed72b?w=600&h=400&fit=crop",
+        "https://images.unsplash.com/photo-1632898657999-ae6920976661?w=600&h=400&fit=crop",
+        "https://images.unsplash.com/photo-1636425732174-8700a53e8dd4?w=600&h=400&fit=crop",
+        "https://images.unsplash.com/photo-1662714208483-3480ccd2de39?w=600&h=400&fit=crop",
+    ]
+
+    now = datetime.now(timezone.utc)
+    pickup_start = (now + timedelta(hours=1)).strftime("%H:%M")
+    pickup_end = (now + timedelta(hours=4)).strftime("%H:%M")
+
+    demo_drops = [
+        # Bakery items
+        [
+            {"name": "Artisan Croissants (6-pack)", "description": "Freshly baked buttery croissants. Baked this morning, perfectly good for today!", "original_price": 300, "discounted_price": 120, "quantity": 8},
+            {"name": "Sourdough Bread Loaf", "description": "Rustic sourdough loaf with crispy crust. Made fresh daily, grab before closing!", "original_price": 250, "discounted_price": 100, "quantity": 5},
+        ],
+        # Restaurant items
+        [
+            {"name": "Butter Chicken Thali", "description": "Full thali with butter chicken, dal, rice, naan and salad. Made for dinner rush!", "original_price": 350, "discounted_price": 150, "quantity": 12},
+            {"name": "Paneer Tikka Wrap (2 pcs)", "description": "Smoky paneer tikka in fresh wraps. Surplus from today's lunch prep.", "original_price": 220, "discounted_price": 90, "quantity": 6},
+        ],
+        # Cafe items
+        [
+            {"name": "Mixed Salad Bowl", "description": "Fresh garden salad with quinoa, avocado and citrus dressing. Prepared this afternoon.", "original_price": 280, "discounted_price": 110, "quantity": 7},
+            {"name": "Fruit Smoothie Pack (3 cups)", "description": "Mango, berry and green smoothies. Made fresh, best enjoyed today!", "original_price": 450, "discounted_price": 180, "quantity": 4},
+        ],
+        # Grocery items
+        [
+            {"name": "Seasonal Fruit Box (2kg)", "description": "Mix of apples, bananas and oranges. Perfectly ripe, need to go today!", "original_price": 400, "discounted_price": 160, "quantity": 15},
+            {"name": "Fresh Veggie Bundle", "description": "Tomatoes, peppers, onions and greens. Great for cooking tonight!", "original_price": 200, "discounted_price": 80, "quantity": 10},
+        ],
+    ]
+
+    for idx, vendor_data in enumerate(demo_vendors):
+        vendor_id = f"vendor_{uuid.uuid4().hex[:12]}"
+        await db.vendors.insert_one({
+            "vendor_id": vendor_id,
+            "user_id": vendor_user_id,
+            "name": vendor_data["name"],
+            "location": vendor_data["location"],
+            "category": vendor_data["category"],
+            "created_at": datetime.now(timezone.utc).isoformat()
+        })
+
+        for drop_idx, drop_data in enumerate(demo_drops[idx]):
+            item_id = f"item_{uuid.uuid4().hex[:12]}"
+            img_index = (idx * 2 + drop_idx) % len(image_urls)
+            await db.food_items.insert_one({
+                "item_id": item_id,
+                "vendor_id": vendor_id,
+                "name": drop_data["name"],
+                "description": drop_data["description"],
+                "original_price": drop_data["original_price"],
+                "discounted_price": drop_data["discounted_price"],
+                "quantity_available": drop_data["quantity"],
+                "pickup_start_time": pickup_start,
+                "pickup_end_time": pickup_end,
+                "image_url": image_urls[img_index],
+                "is_active": True,
+                "created_at": datetime.now(timezone.utc).isoformat()
+            })
+
+    logger.info("Demo data seeded: 4 vendors, 8 food drops")
+
+async def expire_old_orders():
+    """Mark reserved orders as expired if pickup window has passed."""
+    while True:
+        try:
+            now = datetime.now(timezone.utc)
+            # Find reserved orders older than 4 hours
+            cutoff = (now - timedelta(hours=4)).isoformat()
+            result = await db.orders.update_many(
+                {"status": "reserved", "created_at": {"$lt": cutoff}},
+                {"$set": {"status": "expired", "updated_at": now.isoformat()}}
+            )
+            if result.modified_count > 0:
+                logger.info(f"Expired {result.modified_count} old orders")
+                # Restore quantities for expired orders
+                expired_orders = await db.orders.find(
+                    {"status": "expired", "updated_at": now.isoformat()}, {"_id": 0}
+                ).to_list(1000)
+                for order in expired_orders:
+                    await db.food_items.update_one(
+                        {"item_id": order["food_item_id"]},
+                        {"$inc": {"quantity_available": order["quantity"]}}
+                    )
+        except Exception as e:
+            logger.error(f"Order expiry task error: {e}")
+        await asyncio.sleep(300)  # Run every 5 minutes
+
 @app.on_event("startup")
 async def startup():
     try:
@@ -610,11 +860,16 @@ async def startup():
         logger.error(f"Storage init failed: {e}")
 
     await seed_admin()
+    await seed_demo_data()
 
     # Create indexes
     await db.users.create_index("email", unique=True)
     await db.login_attempts.create_index("identifier")
+    await db.password_reset_tokens.create_index("expires_at", expireAfterSeconds=0)
     logger.info("Database indexes created")
+
+    # Start background order expiry task
+    asyncio.create_task(expire_old_orders())
 
 @app.on_event("shutdown")
 async def shutdown_db_client():

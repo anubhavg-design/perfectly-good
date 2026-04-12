@@ -154,7 +154,7 @@ function Checkout() {
             <div className="w-20 h-20 bg-[#F4F1EA] rounded-xl flex items-center justify-center flex-shrink-0">
               {drop.image_url ? (
                 <img
-                  src={`${process.env.REACT_APP_BACKEND_URL}${drop.image_url}`}
+                  src={drop.image_url.startsWith("http") ? drop.image_url : `${process.env.REACT_APP_BACKEND_URL}${drop.image_url}`}
                   alt={drop.name}
                   className="w-full h-full object-cover rounded-xl"
                 />
