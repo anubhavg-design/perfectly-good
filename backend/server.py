@@ -502,6 +502,24 @@ async def admin_delete_menu_item(menu_item_id: str, request: Request):
     await db.menu_items.update_one({"menu_item_id": menu_item_id}, {"$set": {"is_active": False}})
     return {"message": "Menu item removed"}
 
+@api_router.delete("/admin/vendors/{vendor_id}")
+async def admin_delete_vendor(vendor_id: str, request: Request):
+    await require_admin(request)
+    vendor = await db.vendors.find_one({"vendor_id": vendor_id}, {"_id": 0})
+    if not vendor:
+        raise HTTPException(status_code=404, detail="Vendor not found")
+
+    # Deactivate all drops for this vendor
+    await db.food_items.update_many({"vendor_id": vendor_id}, {"$set": {"is_active": False}})
+    # Soft-delete all menu items
+    await db.menu_items.update_many({"vendor_id": vendor_id}, {"$set": {"is_active": False}})
+    # Remove vendor record
+    await db.vendors.delete_one({"vendor_id": vendor_id})
+    # Reset the vendor user's role back to 'user'
+    await db.users.update_one({"user_id": vendor["user_id"]}, {"$set": {"role": "user"}})
+
+    return {"message": "Vendor deleted"}
+
 @api_router.post("/admin/upload")
 async def admin_upload_image(file: UploadFile = File(...), request: Request = None):
     await require_admin(request)

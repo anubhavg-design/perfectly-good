@@ -101,6 +101,17 @@ function AdminPanel() {
     } catch (err) { toast.error("Failed to remove"); }
   };
 
+  const [confirmDelete, setConfirmDelete] = useState(null);
+
+  const deleteVendor = async (vendorId) => {
+    try {
+      await axios.delete(`${API}/admin/vendors/${vendorId}`, { withCredentials: true });
+      toast.success("Vendor deleted");
+      setConfirmDelete(null);
+      loadVendors();
+    } catch (err) { toast.error(err.response?.data?.detail || "Failed to delete vendor"); }
+  };
+
   const imgSrc = (url) => url ? (url.startsWith("http") ? url : `${process.env.REACT_APP_BACKEND_URL}${url}`) : null;
 
   return (
@@ -149,6 +160,20 @@ function AdminPanel() {
                       <button onClick={() => loadMenu(v)} className="flex-1 text-sm font-medium text-[#2E7D32] bg-[#2E7D32]/10 py-2 rounded-lg hover:bg-[#2E7D32]/20 transition-colors" data-testid="manage-menu-button">
                         Manage Menu
                       </button>
+                      {confirmDelete === v.vendor_id ? (
+                        <div className="flex gap-1">
+                          <button onClick={() => deleteVendor(v.vendor_id)} className="text-xs font-medium text-white bg-[#C65D47] px-3 py-2 rounded-lg hover:bg-[#b04d3a] transition-colors" data-testid="confirm-delete-vendor">
+                            Yes, delete
+                          </button>
+                          <button onClick={() => setConfirmDelete(null)} className="text-xs font-medium text-[#4A5D4E] bg-[#F4F1EA] px-3 py-2 rounded-lg hover:bg-[#E5E2DA] transition-colors">
+                            Cancel
+                          </button>
+                        </div>
+                      ) : (
+                        <button onClick={() => setConfirmDelete(v.vendor_id)} className="px-3 py-2 text-[#C65D47] hover:bg-[#C65D47]/10 rounded-lg transition-colors" data-testid="delete-vendor-button">
+                          <Trash2 size={16} />
+                        </button>
+                      )}
                     </div>
                   </div>
                 ))}
