@@ -3,7 +3,7 @@ import { useNavigate } from "react-router-dom";
 import axios from "axios";
 const API = `${process.env.REACT_APP_BACKEND_URL}/api`;
 import BottomNav from "../components/BottomNav";
-import { User as UserIcon, LogOut, MapPin, Mail, Store, ShoppingBag } from "lucide-react";
+import { User as UserIcon, LogOut, MapPin, Mail, ShoppingBag, Shield } from "lucide-react";
 import { Button } from "../components/ui/button";
 import { toast } from "sonner";
 import BecomeVendorModal from "../components/BecomeVendorModal";
@@ -94,7 +94,22 @@ function Profile() {
 
         {/* Actions */}
         <div className="space-y-3 mb-6">
-          {user?.role !== 'vendor' && (
+          {user?.role === 'admin' && (
+            <button
+              onClick={() => navigate('/admin')}
+              className="w-full bg-white border border-[#E5E2DA] rounded-xl p-4 flex items-center gap-3 hover:bg-[#F4F1EA] transition-colors text-left"
+              data-testid="admin-panel-button"
+            >
+              <div className="w-10 h-10 rounded-full bg-[#C65D47]/10 flex items-center justify-center">
+                <Shield size={20} className="text-[#C65D47]" />
+              </div>
+              <div>
+                <p className="font-medium text-[#1A2E1A]">Admin Panel</p>
+                <p className="text-sm text-[#4A5D4E]">Onboard vendors & manage menus</p>
+              </div>
+            </button>
+          )}
+          {user?.role !== 'vendor' && user?.role !== 'admin' && (
             <button
               onClick={() => setShowVendorModal(true)}
               className="w-full bg-white border border-[#E5E2DA] rounded-xl p-4 flex items-center gap-3 hover:bg-[#F4F1EA] transition-colors text-left"

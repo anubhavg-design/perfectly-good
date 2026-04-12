@@ -8,6 +8,7 @@ import Orders from "./pages/Orders";
 import Profile from "./pages/Profile";
 import VendorDashboard from "./pages/VendorDashboard";
 import AddEditDrop from "./pages/AddEditDrop";
+import AdminPanel from "./pages/AdminPanel";
 import ProtectedRoute from "./components/ProtectedRoute";
 import { Toaster } from "./components/ui/sonner";
 
@@ -25,6 +26,7 @@ function App() {
           <Route path="/vendor" element={<ProtectedRoute><VendorDashboard /></ProtectedRoute>} />
           <Route path="/vendor/add-drop" element={<ProtectedRoute><AddEditDrop /></ProtectedRoute>} />
           <Route path="/vendor/edit-drop/:itemId" element={<ProtectedRoute><AddEditDrop /></ProtectedRoute>} />
+          <Route path="/admin" element={<ProtectedRoute><AdminPanel /></ProtectedRoute>} />
         </Routes>
         <Toaster position="top-center" />
       </BrowserRouter>

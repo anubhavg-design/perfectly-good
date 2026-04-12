@@ -10,6 +10,9 @@ class PerfectlyGoodAPITester:
         self.session = requests.Session()  # Use session to maintain cookies
         self.user_id = None
         self.vendor_id = None
+        self.admin_user_id = None
+        self.created_vendor_id = None
+        self.created_menu_item_id = None
         self.tests_run = 0
         self.tests_passed = 0
         self.test_results = []
@@ -638,12 +641,333 @@ class PerfectlyGoodAPITester:
         except Exception as e:
             print(f"⚠️ Cleanup warning: {e}")
 
+    def test_admin_authentication(self):
+        """Test admin login with correct role"""
+        print("\n=== ADMIN AUTHENTICATION ===")
+        
+        # Test admin login
+        response = self.run_test(
+            "Admin Login",
+            "POST",
+            "auth/login",
+            200,
+            data={"email": "admin@perfectlygood.com", "password": "admin123"}
+        )
+        
+        if response:
+            user_role = response.get('role')
+            if user_role == 'admin':
+                self.log_test("Admin role verification", True, f"Role: {user_role}")
+                self.admin_user_id = response.get('user_id')
+                return True
+            else:
+                self.log_test("Admin role verification", False, f"Expected 'admin', got '{user_role}'")
+                return False
+        else:
+            self.log_test("Admin login", False, "Login failed")
+            return False
+
+    def test_admin_vendor_management(self):
+        """Test admin vendor management endpoints"""
+        print("\n=== ADMIN VENDOR MANAGEMENT ===")
+        
+        # Test GET /api/admin/vendors
+        vendors = self.run_test(
+            "List vendors (admin only)",
+            "GET",
+            "admin/vendors",
+            200
+        )
+        if vendors is not None:
+            self.log_test("GET /api/admin/vendors", True, f"Found {len(vendors)} vendors")
+        else:
+            self.log_test("GET /api/admin/vendors", False, "Failed to get vendors")
+
+        # Test POST /api/admin/vendors - Create new vendor
+        timestamp = datetime.now().strftime('%H%M%S')
+        vendor_data = {
+            "name": f"Test Vendor {timestamp}",
+            "category": "Restaurant",
+            "location": {"lat": 28.6139, "lon": 77.2090, "address": "Test Location Delhi"},
+            "email": f"testvendor{timestamp}@test.com",
+            "password": "testpass123",
+            "logo_url": None
+        }
+        
+        response = self.run_test(
+            "Create vendor with user account",
+            "POST",
+            "admin/vendors",
+            200,
+            data=vendor_data
+        )
+        
+        if response:
+            self.created_vendor_id = response.get('vendor_id')
+            self.log_test("POST /api/admin/vendors", True, f"Created vendor: {self.created_vendor_id}")
+            return True
+        else:
+            self.log_test("POST /api/admin/vendors", False, "Failed to create vendor")
+            return False
+
+    def test_admin_menu_management(self):
+        """Test admin menu management endpoints"""
+        print("\n=== ADMIN MENU MANAGEMENT ===")
+        
+        if not self.created_vendor_id:
+            self.log_test("Menu management tests", False, "No vendor ID available")
+            return False
+
+        # Test GET /api/admin/vendors/{id}/menu
+        menu_items = self.run_test(
+            "Get vendor menu items",
+            "GET",
+            f"admin/vendors/{self.created_vendor_id}/menu",
+            200
+        )
+        if menu_items is not None:
+            self.log_test("GET /api/admin/vendors/{id}/menu", True, f"Found {len(menu_items)} menu items")
+        else:
+            self.log_test("GET /api/admin/vendors/{id}/menu", False, "Failed to get menu items")
+
+        # Test POST /api/admin/vendors/{id}/menu - Add menu item
+        menu_item_data = {
+            "name": "Test Menu Item",
+            "description": "A test menu item for API testing",
+            "original_price": 250.0,
+            "image_url": None
+        }
+        
+        response = self.run_test(
+            "Add menu item to vendor",
+            "POST",
+            f"admin/vendors/{self.created_vendor_id}/menu",
+            200,
+            data=menu_item_data
+        )
+        
+        if response:
+            self.created_menu_item_id = response.get('menu_item_id')
+            self.log_test("POST /api/admin/vendors/{id}/menu", True, f"Created menu item: {self.created_menu_item_id}")
+        else:
+            self.log_test("POST /api/admin/vendors/{id}/menu", False, "Failed to create menu item")
+
+        # Test DELETE /api/admin/menu-items/{id} - Soft delete menu item
+        if self.created_menu_item_id:
+            response = self.run_test(
+                "Soft delete menu item",
+                "DELETE",
+                f"admin/menu-items/{self.created_menu_item_id}",
+                200
+            )
+            if response is not None:
+                self.log_test("DELETE /api/admin/menu-items/{id}", True, "Menu item soft deleted")
+            else:
+                self.log_test("DELETE /api/admin/menu-items/{id}", False, "Failed to delete menu item")
+
+        return True
+
+    def test_vendor_menu_access(self):
+        """Test vendor menu access"""
+        print("\n=== VENDOR MENU ACCESS ===")
+        
+        # Login as demo vendor first
+        response = self.run_test(
+            "Demo vendor login",
+            "POST",
+            "auth/login",
+            200,
+            data={"email": "vendor@demo.com", "password": "vendor123"}
+        )
+        
+        if not response:
+            self.log_test("Vendor login for menu test", False, "Failed to login as vendor")
+            return False
+
+        # Test GET /api/vendor/menu
+        menu_items = self.run_test(
+            "Get vendor own menu items",
+            "GET",
+            "vendor/menu",
+            200
+        )
+        if menu_items is not None:
+            self.log_test("GET /api/vendor/menu", True, f"Vendor can access {len(menu_items)} menu items")
+            return True
+        else:
+            self.log_test("GET /api/vendor/menu", False, "Failed to get vendor menu")
+            return False
+
+    def test_vendor_drop_from_menu(self):
+        """Test vendor drop creation from menu items"""
+        print("\n=== VENDOR DROP FROM MENU ===")
+        
+        # Get vendor's menu items first
+        menu_items = self.run_test(
+            "Get menu for drop creation",
+            "GET",
+            "vendor/menu",
+            200
+        )
+        
+        if not menu_items or len(menu_items) == 0:
+            self.log_test("Vendor drop from menu", False, "No menu items available")
+            return False
+
+        # Test POST /api/vendor/drops - Create drop from menu item
+        menu_item = menu_items[0]
+        drop_data = {
+            "menu_item_id": menu_item['menu_item_id'],
+            "discounted_price": menu_item['original_price'] * 0.7,  # 30% discount
+            "quantity_available": 5,
+            "pickup_start_time": "18:00",
+            "pickup_end_time": "20:00"
+        }
+        
+        response = self.run_test(
+            "Create drop from menu item",
+            "POST",
+            "vendor/drops",
+            200,
+            data=drop_data
+        )
+        if response:
+            self.log_test("POST /api/vendor/drops (from menu)", True, f"Drop created from menu item")
+            return True
+        else:
+            self.log_test("POST /api/vendor/drops (from menu)", False, "Failed to create drop from menu")
+            return False
+
+    def test_convenience_fee_calculation(self):
+        """Test 5% convenience fee in order creation"""
+        print("\n=== CONVENIENCE FEE TESTING ===")
+        
+        # Login as regular user first
+        response = self.run_test(
+            "User login for order test",
+            "POST",
+            "auth/login",
+            200,
+            data={"email": "testuser@example.com", "password": "test1234"}
+        )
+        
+        if not response:
+            # Try to register user first
+            response = self.run_test(
+                "Register test user",
+                "POST",
+                "auth/register",
+                200,
+                data={"name": "Test User", "email": "testuser@example.com", "password": "test1234"}
+            )
+
+        # Get available drops
+        drops = self.run_test(
+            "Get available drops for order",
+            "GET",
+            "drops",
+            200
+        )
+        
+        if not drops or len(drops) == 0:
+            self.log_test("Convenience fee test", False, "No drops available")
+            return False
+
+        # Test POST /api/orders/create - Check convenience fee calculation
+        drop = drops[0]
+        order_data = {
+            "food_item_id": drop['item_id'],
+            "quantity": 2
+        }
+        
+        response = self.run_test(
+            "Create order with convenience fee",
+            "POST",
+            "orders/create",
+            200,
+            data=order_data
+        )
+        
+        if response:
+            item_total = response.get('item_total', 0)
+            convenience_fee = response.get('convenience_fee', 0)
+            total = response.get('total', 0)
+            
+            expected_fee = round(item_total * 0.05, 2)  # 5% convenience fee
+            expected_total = item_total + convenience_fee
+            
+            fee_correct = abs(convenience_fee - expected_fee) < 0.01
+            total_correct = abs(total - expected_total) < 0.01
+            
+            if fee_correct and total_correct:
+                self.log_test("Convenience fee calculation", True, f"5% fee: ₹{convenience_fee} on ₹{item_total}")
+            else:
+                self.log_test("Convenience fee calculation", False, f"Expected ₹{expected_fee}, got ₹{convenience_fee}")
+            
+            return fee_correct and total_correct
+
+        return False
+
+    def test_admin_access_control(self):
+        """Test 403 returned when non-admin tries admin endpoints"""
+        print("\n=== ADMIN ACCESS CONTROL ===")
+        
+        # Login as vendor (non-admin)
+        response = self.run_test(
+            "Vendor login for access control test",
+            "POST",
+            "auth/login",
+            200,
+            data={"email": "vendor@demo.com", "password": "vendor123"}
+        )
+        
+        if not response:
+            self.log_test("Access control test setup", False, "Failed to login as vendor")
+            return False
+
+        # Test non-admin access to admin endpoints - should return 403
+        response = self.run_test(
+            "Non-admin access to admin endpoint",
+            "GET",
+            "admin/vendors",
+            403  # Should be forbidden
+        )
+        if response is None:  # 403 should return None from run_test
+            self.log_test("403 for non-admin access", True, "Non-admin correctly blocked from admin endpoints")
+            return True
+        else:
+            self.log_test("403 for non-admin access", False, "Non-admin was not blocked")
+            return False
+
     def run_all_tests(self):
         """Run all tests"""
         print("🚀 Starting Perfectly Good API Tests...")
         print(f"🌐 Testing against: {self.base_url}")
         
         try:
+            # Test admin authentication first
+            admin_auth_success = self.test_admin_authentication()
+            if not admin_auth_success:
+                print("❌ Admin authentication failed, aborting admin tests")
+                return 1
+            
+            # Test admin panel features
+            self.test_admin_vendor_management()
+            self.test_admin_menu_management()
+            
+            # Test vendor menu features
+            self.test_vendor_menu_access()
+            self.test_vendor_drop_from_menu()
+            
+            # Test convenience fee
+            self.test_convenience_fee_calculation()
+            
+            # Test access control
+            self.test_admin_access_control()
+            
+            # Login back as admin for remaining tests
+            self.test_admin_authentication()
+            
             # Test authentication flow
             auth_success = self.test_auth_flow()
             if not auth_success:

@@ -153,6 +153,43 @@ class ResetPasswordInput(BaseModel):
     token: str
     new_password: str
 
+# Admin models
+class AdminVendorCreate(BaseModel):
+    name: str
+    category: str
+    location: dict
+    email: str  # vendor login email
+    password: str  # vendor login password
+    logo_url: Optional[str] = None
+
+class AdminVendorUpdate(BaseModel):
+    name: Optional[str] = None
+    category: Optional[str] = None
+    location: Optional[dict] = None
+    logo_url: Optional[str] = None
+
+class MenuItemCreate(BaseModel):
+    name: str
+    description: str
+    original_price: float
+    image_url: Optional[str] = None
+
+class MenuItemUpdate(BaseModel):
+    name: Optional[str] = None
+    description: Optional[str] = None
+    original_price: Optional[float] = None
+    image_url: Optional[str] = None
+    is_active: Optional[bool] = None
+
+class DropFromMenu(BaseModel):
+    menu_item_id: str
+    discounted_price: float
+    quantity_available: int
+    pickup_start_time: str
+    pickup_end_time: str
+
+CONVENIENCE_FEE_PERCENT = 5.0  # 5% convenience fee
+
 # ---------- Auth Helper ----------
 
 async def get_current_user(request: Request) -> dict:
@@ -358,6 +395,132 @@ async def reset_password(data: ResetPasswordInput):
 
     return {"message": "Password reset successfully"}
 
+# ---------- Admin Endpoints ----------
+
+async def require_admin(request: Request):
+    user = await get_current_user(request)
+    if user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Admin access required")
+    return user
+
+@api_router.get("/admin/vendors")
+async def admin_list_vendors(request: Request):
+    await require_admin(request)
+    vendors = await db.vendors.find({}, {"_id": 0}).to_list(1000)
+    # Attach user email to each vendor
+    for v in vendors:
+        user = await db.users.find_one({"user_id": v["user_id"]}, {"_id": 0, "email": 1, "name": 1})
+        v["user_email"] = user["email"] if user else ""
+    return vendors
+
+@api_router.post("/admin/vendors")
+async def admin_create_vendor(data: AdminVendorCreate, request: Request):
+    await require_admin(request)
+
+    # Create vendor user account
+    email = data.email.strip().lower()
+    existing = await db.users.find_one({"email": email}, {"_id": 0})
+    if existing:
+        raise HTTPException(status_code=400, detail="Email already registered")
+
+    vendor_user_id = f"user_{uuid.uuid4().hex[:12]}"
+    await db.users.insert_one({
+        "user_id": vendor_user_id,
+        "email": email,
+        "name": data.name,
+        "password_hash": hash_password(data.password),
+        "role": "vendor",
+        "picture": None,
+        "location": None,
+        "created_at": datetime.now(timezone.utc).isoformat()
+    })
+
+    vendor_id = f"vendor_{uuid.uuid4().hex[:12]}"
+    await db.vendors.insert_one({
+        "vendor_id": vendor_id,
+        "user_id": vendor_user_id,
+        "name": data.name,
+        "location": data.location,
+        "category": data.category,
+        "logo_url": data.logo_url,
+        "created_at": datetime.now(timezone.utc).isoformat()
+    })
+
+    return {"vendor_id": vendor_id, "user_id": vendor_user_id, "message": "Vendor created"}
+
+@api_router.put("/admin/vendors/{vendor_id}")
+async def admin_update_vendor(vendor_id: str, data: AdminVendorUpdate, request: Request):
+    await require_admin(request)
+    vendor = await db.vendors.find_one({"vendor_id": vendor_id}, {"_id": 0})
+    if not vendor:
+        raise HTTPException(status_code=404, detail="Vendor not found")
+    update = {k: v for k, v in data.model_dump().items() if v is not None}
+    if update:
+        await db.vendors.update_one({"vendor_id": vendor_id}, {"$set": update})
+    return {"message": "Vendor updated"}
+
+@api_router.get("/admin/vendors/{vendor_id}/menu")
+async def admin_get_menu(vendor_id: str, request: Request):
+    await require_admin(request)
+    items = await db.menu_items.find({"vendor_id": vendor_id}, {"_id": 0}).to_list(1000)
+    return items
+
+@api_router.post("/admin/vendors/{vendor_id}/menu")
+async def admin_add_menu_item(vendor_id: str, data: MenuItemCreate, request: Request):
+    await require_admin(request)
+    vendor = await db.vendors.find_one({"vendor_id": vendor_id}, {"_id": 0})
+    if not vendor:
+        raise HTTPException(status_code=404, detail="Vendor not found")
+
+    menu_item_id = f"menu_{uuid.uuid4().hex[:12]}"
+    await db.menu_items.insert_one({
+        "menu_item_id": menu_item_id,
+        "vendor_id": vendor_id,
+        "name": data.name,
+        "description": data.description,
+        "original_price": data.original_price,
+        "image_url": data.image_url,
+        "is_active": True,
+        "created_at": datetime.now(timezone.utc).isoformat()
+    })
+    return {"menu_item_id": menu_item_id, "message": "Menu item created"}
+
+@api_router.put("/admin/menu-items/{menu_item_id}")
+async def admin_update_menu_item(menu_item_id: str, data: MenuItemUpdate, request: Request):
+    await require_admin(request)
+    item = await db.menu_items.find_one({"menu_item_id": menu_item_id}, {"_id": 0})
+    if not item:
+        raise HTTPException(status_code=404, detail="Menu item not found")
+    update = {k: v for k, v in data.model_dump().items() if v is not None}
+    if update:
+        await db.menu_items.update_one({"menu_item_id": menu_item_id}, {"$set": update})
+    return {"message": "Menu item updated"}
+
+@api_router.delete("/admin/menu-items/{menu_item_id}")
+async def admin_delete_menu_item(menu_item_id: str, request: Request):
+    await require_admin(request)
+    await db.menu_items.update_one({"menu_item_id": menu_item_id}, {"$set": {"is_active": False}})
+    return {"message": "Menu item removed"}
+
+@api_router.post("/admin/upload")
+async def admin_upload_image(file: UploadFile = File(...), request: Request = None):
+    await require_admin(request)
+    ext = file.filename.split(".")[-1] if "." in file.filename else "jpg"
+    path = f"{APP_NAME}/admin/{uuid.uuid4()}.{ext}"
+    data = await file.read()
+    result = put_object(path, data, file.content_type or "image/jpeg")
+    await db.uploaded_files.insert_one({
+        "file_id": str(uuid.uuid4()),
+        "storage_path": result["path"],
+        "original_filename": file.filename,
+        "content_type": file.content_type,
+        "size": result["size"],
+        "is_deleted": False,
+        "created_at": datetime.now(timezone.utc).isoformat()
+    })
+    image_url = f"/api/files/{result['path']}"
+    return {"image_url": image_url, "storage_path": result["path"]}
+
 # ---------- Vendor Endpoints ----------
 
 @api_router.post("/vendor/create")
@@ -383,12 +546,43 @@ async def create_vendor(vendor_data: VendorCreate, request: Request):
     return {"vendor_id": vendor_id, "message": "Vendor created successfully"}
 
 @api_router.post("/vendor/drops")
-async def create_drop(drop_data: FoodItemCreate, request: Request):
+async def create_drop(drop_data: DropFromMenu, request: Request):
     current_user = await get_current_user(request)
     vendor = await db.vendors.find_one({"user_id": current_user["user_id"]}, {"_id": 0})
     if not vendor:
         raise HTTPException(status_code=403, detail="User is not a vendor")
 
+    # Get menu item
+    menu_item = await db.menu_items.find_one({"menu_item_id": drop_data.menu_item_id, "vendor_id": vendor["vendor_id"], "is_active": True}, {"_id": 0})
+    if not menu_item:
+        raise HTTPException(status_code=404, detail="Menu item not found")
+
+    item_id = f"item_{uuid.uuid4().hex[:12]}"
+    food_item = {
+        "item_id": item_id,
+        "vendor_id": vendor["vendor_id"],
+        "menu_item_id": drop_data.menu_item_id,
+        "name": menu_item["name"],
+        "description": menu_item["description"],
+        "original_price": menu_item["original_price"],
+        "discounted_price": drop_data.discounted_price,
+        "quantity_available": drop_data.quantity_available,
+        "pickup_start_time": drop_data.pickup_start_time,
+        "pickup_end_time": drop_data.pickup_end_time,
+        "image_url": menu_item.get("image_url"),
+        "is_active": True,
+        "created_at": datetime.now(timezone.utc).isoformat()
+    }
+    await db.food_items.insert_one(food_item)
+    return {"item_id": item_id, "message": "Drop created successfully"}
+
+# Keep legacy endpoint for backward compatibility & editing
+@api_router.post("/vendor/drops/custom")
+async def create_custom_drop(drop_data: FoodItemCreate, request: Request):
+    current_user = await get_current_user(request)
+    vendor = await db.vendors.find_one({"user_id": current_user["user_id"]}, {"_id": 0})
+    if not vendor:
+        raise HTTPException(status_code=403, detail="User is not a vendor")
     item_id = f"item_{uuid.uuid4().hex[:12]}"
     food_item = {
         "item_id": item_id,
@@ -406,6 +600,15 @@ async def create_drop(drop_data: FoodItemCreate, request: Request):
     }
     await db.food_items.insert_one(food_item)
     return {"item_id": item_id, "message": "Drop created successfully"}
+
+@api_router.get("/vendor/menu")
+async def get_vendor_menu(request: Request):
+    current_user = await get_current_user(request)
+    vendor = await db.vendors.find_one({"user_id": current_user["user_id"]}, {"_id": 0})
+    if not vendor:
+        raise HTTPException(status_code=403, detail="User is not a vendor")
+    items = await db.menu_items.find({"vendor_id": vendor["vendor_id"], "is_active": True}, {"_id": 0}).to_list(1000)
+    return items
 
 @api_router.put("/vendor/drops/{item_id}")
 async def update_drop(item_id: str, drop_data: FoodItemUpdate, request: Request):
@@ -603,17 +806,23 @@ async def create_order(order_data: OrderCreate, request: Request):
     if item["quantity_available"] < order_data.quantity:
         raise HTTPException(status_code=400, detail="Insufficient quantity available")
 
-    total_amount = int(item["discounted_price"] * order_data.quantity * 100)
+    total_amount_items = item["discounted_price"] * order_data.quantity
+    convenience_fee = round(total_amount_items * CONVENIENCE_FEE_PERCENT / 100, 2)
+    total_with_fee = total_amount_items + convenience_fee
+    total_paise = int(total_with_fee * 100)
 
     razorpay_order = razorpay_client.order.create({
-        "amount": total_amount,
+        "amount": total_paise,
         "currency": "INR",
         "payment_capture": 1
     })
 
     return {
         "razorpay_order_id": razorpay_order["id"],
-        "amount": total_amount,
+        "amount": total_paise,
+        "item_total": total_amount_items,
+        "convenience_fee": convenience_fee,
+        "total": total_with_fee,
         "currency": "INR",
         "key_id": os.environ['RAZORPAY_KEY_ID']
     }
@@ -641,7 +850,9 @@ async def verify_order(order_data: OrderVerify, request: Request):
     vendor = await db.vendors.find_one({"vendor_id": item["vendor_id"]}, {"_id": 0})
 
     order_id = f"order_{uuid.uuid4().hex[:12]}"
-    total_price = item["discounted_price"] * order_data.quantity
+    item_total = item["discounted_price"] * order_data.quantity
+    convenience_fee = round(item_total * CONVENIENCE_FEE_PERCENT / 100, 2)
+    total_price = item_total + convenience_fee
 
     order = {
         "order_id": order_id,
@@ -652,6 +863,8 @@ async def verify_order(order_data: OrderVerify, request: Request):
         "vendor_name": vendor["name"] if vendor else "Unknown",
         "vendor_location": vendor["location"] if vendor else {},
         "quantity": order_data.quantity,
+        "item_total": item_total,
+        "convenience_fee": convenience_fee,
         "total_price": total_price,
         "status": "reserved",
         "razorpay_order_id": order_data.razorpay_order_id,
@@ -807,10 +1020,26 @@ async def seed_demo_data():
 
         for drop_idx, drop_data in enumerate(demo_drops[idx]):
             item_id = f"item_{uuid.uuid4().hex[:12]}"
+            menu_item_id = f"menu_{uuid.uuid4().hex[:12]}"
             img_index = (idx * 2 + drop_idx) % len(image_urls)
+
+            # Create menu item first
+            await db.menu_items.insert_one({
+                "menu_item_id": menu_item_id,
+                "vendor_id": vendor_id,
+                "name": drop_data["name"],
+                "description": drop_data["description"],
+                "original_price": drop_data["original_price"],
+                "image_url": image_urls[img_index],
+                "is_active": True,
+                "created_at": datetime.now(timezone.utc).isoformat()
+            })
+
+            # Create food item (drop) linked to menu item
             await db.food_items.insert_one({
                 "item_id": item_id,
                 "vendor_id": vendor_id,
+                "menu_item_id": menu_item_id,
                 "name": drop_data["name"],
                 "description": drop_data["description"],
                 "original_price": drop_data["original_price"],

@@ -127,7 +127,9 @@ function Checkout() {
 
   if (!drop) return null;
 
-  const total = drop.discounted_price * quantity;
+  const subtotal = drop.discounted_price * quantity;
+  const convenienceFee = Math.round(subtotal * 5) / 100;
+  const total = subtotal + convenienceFee;
 
   return (
     <div className="container-mobile" data-testid="checkout-page">
@@ -222,16 +224,24 @@ function Checkout() {
         <div className="bg-[#F4F1EA] rounded-2xl p-6 mb-20">
           <div className="flex justify-between items-center mb-3">
             <span className="text-[#4A5D4E]">Item price</span>
-            <span className="text-[#1A2E1A]">₹{drop.discounted_price}</span>
+            <span className="text-[#1A2E1A]">&#8377;{drop.discounted_price}</span>
           </div>
           <div className="flex justify-between items-center mb-3">
             <span className="text-[#4A5D4E]">Quantity</span>
-            <span className="text-[#1A2E1A]">× {quantity}</span>
+            <span className="text-[#1A2E1A]">&times; {quantity}</span>
+          </div>
+          <div className="flex justify-between items-center mb-3">
+            <span className="text-[#4A5D4E]">Subtotal</span>
+            <span className="text-[#1A2E1A]">&#8377;{subtotal.toFixed(2)}</span>
+          </div>
+          <div className="flex justify-between items-center mb-3">
+            <span className="text-[#4A5D4E]">Convenience fee (5%)</span>
+            <span className="text-[#1A2E1A]">&#8377;{convenienceFee.toFixed(2)}</span>
           </div>
           <div className="border-t border-[#E5E2DA] my-4"></div>
           <div className="flex justify-between items-center">
             <span className="text-lg font-medium text-[#1A2E1A]" style={{ fontFamily: 'Outfit, sans-serif' }}>Total</span>
-            <span className="text-2xl font-medium text-[#2E7D32]" data-testid="total-price">₹{total.toFixed(2)}</span>
+            <span className="text-2xl font-medium text-[#2E7D32]" data-testid="total-price">&#8377;{total.toFixed(2)}</span>
           </div>
         </div>
       </div>
