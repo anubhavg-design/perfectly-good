@@ -3,25 +3,6 @@
   "version": "0.1.0",
   "private": true,
   "dependencies": {
-    "react": "^19.0.0",
-    "react-dom": "^19.0.0",
-    "react-scripts": "5.0.1",
-    "axios": "^1.8.4"
-  },
-  "scripts": {
-    "start": "craco start",
-    "build": "craco build",
-    "test": "craco test"
-  }
-}
-
-
-or this: 
-{
-  "name": "frontend",
-  "version": "0.1.0",
-  "private": true,
-  "dependencies": {
     "@hookform/resolvers": "^5.0.1",
     "@phosphor-icons/react": "^2.1.10",
     "@radix-ui/react-accordion": "^1.2.8",
