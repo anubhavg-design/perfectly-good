@@ -726,6 +726,31 @@ async def upload_image(file: UploadFile = File(...), request: Request = None):
 
 # ---------- Drops Endpoints ----------
 
+# ---------- Drop Query Helpers ----------
+
+def _matches_search(item: dict, vendor: dict, search: str) -> bool:
+    s = search.lower()
+    return (s in item["name"].lower()
+            or s in item.get("description", "").lower()
+            or s in vendor["name"].lower())
+
+def _enrich_with_distance(food_item: dict, vendor: dict, lat: float, lon: float):
+    vendor_loc = vendor.get("location")
+    if not vendor_loc:
+        return
+    vendor_lat = vendor_loc.get("lat")
+    vendor_lon = vendor_loc.get("lon")
+    if vendor_lat and vendor_lon:
+        food_item["distance"] = round(calculate_distance(lat, lon, vendor_lat, vendor_lon), 1)
+
+def _sort_drops(result: list, sort_by: str, has_location: bool):
+    if sort_by == "price":
+        result.sort(key=lambda x: x.get("discounted_price", float('inf')))
+    elif sort_by == "discount":
+        result.sort(key=lambda x: -(x.get("original_price", 0) - x.get("discounted_price", 0)))
+    elif has_location:
+        result.sort(key=lambda x: x.get("distance", float('inf')))
+
 @api_router.get("/drops")
 async def get_drops(
     lat: Optional[float] = Query(None),
@@ -734,56 +759,34 @@ async def get_drops(
     category: Optional[str] = Query(None),
     max_price: Optional[float] = Query(None),
     max_distance: Optional[float] = Query(None),
-    sort_by: Optional[str] = Query(None),  # "price", "distance", "discount"
+    sort_by: Optional[str] = Query(None),
 ):
-    query = {"is_active": True, "quantity_available": {"$gt": 0}}
-    items = await db.food_items.find(query, {"_id": 0}).to_list(1000)
+    items = await db.food_items.find({"is_active": True, "quantity_available": {"$gt": 0}}, {"_id": 0}).to_list(1000)
+    has_location = lat is not None and lon is not None
 
     result = []
     for item in items:
         vendor = await db.vendors.find_one({"vendor_id": item["vendor_id"]}, {"_id": 0})
         if not vendor:
             continue
-
-        # Category filter
         if category and vendor.get("category", "").lower() != category.lower():
             continue
-
-        # Search filter
-        if search:
-            search_lower = search.lower()
-            if (search_lower not in item["name"].lower()
-                and search_lower not in item.get("description", "").lower()
-                and search_lower not in vendor["name"].lower()):
-                continue
-
-        # Price filter
+        if search and not _matches_search(item, vendor, search):
+            continue
         if max_price and item["discounted_price"] > max_price:
             continue
 
         food_item = {**item, "vendor_name": vendor["name"], "vendor_location": vendor["location"], "vendor_category": vendor.get("category", "")}
 
-        if lat is not None and lon is not None and vendor.get("location"):
-            vendor_lat = vendor["location"].get("lat")
-            vendor_lon = vendor["location"].get("lon")
-            if vendor_lat and vendor_lon:
-                distance = calculate_distance(lat, lon, vendor_lat, vendor_lon)
-                food_item["distance"] = round(distance, 1)
+        if has_location:
+            _enrich_with_distance(food_item, vendor, lat, lon)
 
-        # Distance filter
         if max_distance and food_item.get("distance") is not None and food_item["distance"] > max_distance:
             continue
 
         result.append(food_item)
 
-    # Sorting
-    if sort_by == "price":
-        result.sort(key=lambda x: x.get("discounted_price", float('inf')))
-    elif sort_by == "discount":
-        result.sort(key=lambda x: -(x.get("original_price", 0) - x.get("discounted_price", 0)))
-    elif lat is not None and lon is not None:
-        result.sort(key=lambda x: x.get("distance", float('inf')))
-
+    _sort_drops(result, sort_by, has_location)
     return result
 
 @api_router.get("/drops/categories")
@@ -817,7 +820,7 @@ async def get_drop_detail(item_id: str, lat: Optional[float] = Query(None), lon:
 
 @api_router.post("/orders/create")
 async def create_order(order_data: OrderCreate, request: Request):
-    current_user = await get_current_user(request)
+    await get_current_user(request)  # auth check
 
     item = await db.food_items.find_one({"item_id": order_data.food_item_id}, {"_id": 0})
     if not item:
@@ -848,6 +851,30 @@ async def create_order(order_data: OrderCreate, request: Request):
         "key_id": os.environ['RAZORPAY_KEY_ID']
     }
 
+def _build_order_doc(current_user, item, vendor, order_data):
+    order_id = f"order_{uuid.uuid4().hex[:12]}"
+    item_total = item["discounted_price"] * order_data.quantity
+    convenience_fee = round(item_total * CONVENIENCE_FEE_PERCENT / 100, 2)
+    return {
+        "order_id": order_id,
+        "user_id": current_user["user_id"],
+        "food_item_id": order_data.food_item_id,
+        "food_item_name": item["name"],
+        "vendor_id": item["vendor_id"],
+        "vendor_name": vendor["name"] if vendor else "Unknown",
+        "vendor_location": vendor["location"] if vendor else {},
+        "quantity": order_data.quantity,
+        "item_total": item_total,
+        "convenience_fee": convenience_fee,
+        "total_price": item_total + convenience_fee,
+        "status": "reserved",
+        "razorpay_order_id": order_data.razorpay_order_id,
+        "razorpay_payment_id": order_data.razorpay_payment_id,
+        "pickup_time": item["pickup_start_time"] + " - " + item["pickup_end_time"],
+        "image_url": item.get("image_url"),
+        "created_at": datetime.now(timezone.utc).isoformat()
+    }
+
 @api_router.post("/orders/verify")
 async def verify_order(order_data: OrderVerify, request: Request):
     current_user = await get_current_user(request)
@@ -869,37 +896,12 @@ async def verify_order(order_data: OrderVerify, request: Request):
         raise HTTPException(status_code=400, detail="Insufficient quantity available")
 
     vendor = await db.vendors.find_one({"vendor_id": item["vendor_id"]}, {"_id": 0})
-
-    order_id = f"order_{uuid.uuid4().hex[:12]}"
-    item_total = item["discounted_price"] * order_data.quantity
-    convenience_fee = round(item_total * CONVENIENCE_FEE_PERCENT / 100, 2)
-    total_price = item_total + convenience_fee
-
-    order = {
-        "order_id": order_id,
-        "user_id": current_user["user_id"],
-        "food_item_id": order_data.food_item_id,
-        "food_item_name": item["name"],
-        "vendor_id": item["vendor_id"],
-        "vendor_name": vendor["name"] if vendor else "Unknown",
-        "vendor_location": vendor["location"] if vendor else {},
-        "quantity": order_data.quantity,
-        "item_total": item_total,
-        "convenience_fee": convenience_fee,
-        "total_price": total_price,
-        "status": "reserved",
-        "razorpay_order_id": order_data.razorpay_order_id,
-        "razorpay_payment_id": order_data.razorpay_payment_id,
-        "pickup_time": item["pickup_start_time"] + " - " + item["pickup_end_time"],
-        "image_url": item.get("image_url"),
-        "created_at": datetime.now(timezone.utc).isoformat()
-    }
+    order = _build_order_doc(current_user, item, vendor, order_data)
     await db.orders.insert_one(order)
 
-    new_quantity = item["quantity_available"] - order_data.quantity
     await db.food_items.update_one(
         {"item_id": order_data.food_item_id},
-        {"$set": {"quantity_available": new_quantity}}
+        {"$set": {"quantity_available": item["quantity_available"] - order_data.quantity}}
     )
 
     order.pop("_id", None)
@@ -969,116 +971,92 @@ async def seed_admin():
         await db.users.update_one({"email": "anubhavg@perfectlygood.in"}, {"$set": {"role": "admin"}})
         logger.info("anubhavg@perfectlygood.in admin role enforced")
 
-async def seed_demo_data():
-    """Seed dummy vendors and food items for testing."""
-    # Check if already seeded
-    existing_vendors = await db.vendors.count_documents({})
-    if existing_vendors > 0:
-        logger.info("Demo data already exists, skipping seed")
-        return
+DEMO_VENDORS = [
+    {"name": "Green Leaf Bakery", "category": "Bakery", "location": {"lat": 28.6139, "lon": 77.2090, "address": "Connaught Place, Delhi"}},
+    {"name": "Spice Garden", "category": "Restaurant", "location": {"lat": 28.6280, "lon": 77.2197, "address": "Karol Bagh, Delhi"}},
+    {"name": "Fresh Bowl Cafe", "category": "Cafe", "location": {"lat": 28.5355, "lon": 77.2100, "address": "Saket, Delhi"}},
+    {"name": "Daily Grocers", "category": "Grocery Store", "location": {"lat": 28.6448, "lon": 77.2167, "address": "Rajender Nagar, Delhi"}},
+]
 
-    # Create demo vendor user
+DEMO_IMAGE_URLS = [
+    "https://images.unsplash.com/photo-1763207291707-e2cf471ed72b?w=600&h=400&fit=crop",
+    "https://images.unsplash.com/photo-1632898657999-ae6920976661?w=600&h=400&fit=crop",
+    "https://images.unsplash.com/photo-1636425732174-8700a53e8dd4?w=600&h=400&fit=crop",
+    "https://images.unsplash.com/photo-1662714208483-3480ccd2de39?w=600&h=400&fit=crop",
+]
+
+DEMO_DROPS = [
+    [
+        {"name": "Artisan Croissants (6-pack)", "description": "Freshly baked buttery croissants. Baked this morning, perfectly good for today!", "original_price": 300, "discounted_price": 120, "quantity": 8},
+        {"name": "Sourdough Bread Loaf", "description": "Rustic sourdough loaf with crispy crust. Made fresh daily, grab before closing!", "original_price": 250, "discounted_price": 100, "quantity": 5},
+    ],
+    [
+        {"name": "Butter Chicken Thali", "description": "Full thali with butter chicken, dal, rice, naan and salad. Made for dinner rush!", "original_price": 350, "discounted_price": 150, "quantity": 12},
+        {"name": "Paneer Tikka Wrap (2 pcs)", "description": "Smoky paneer tikka in fresh wraps. Surplus from today's lunch prep.", "original_price": 220, "discounted_price": 90, "quantity": 6},
+    ],
+    [
+        {"name": "Mixed Salad Bowl", "description": "Fresh garden salad with quinoa, avocado and citrus dressing. Prepared this afternoon.", "original_price": 280, "discounted_price": 110, "quantity": 7},
+        {"name": "Fruit Smoothie Pack (3 cups)", "description": "Mango, berry and green smoothies. Made fresh, best enjoyed today!", "original_price": 450, "discounted_price": 180, "quantity": 4},
+    ],
+    [
+        {"name": "Seasonal Fruit Box (2kg)", "description": "Mix of apples, bananas and oranges. Perfectly ripe, need to go today!", "original_price": 400, "discounted_price": 160, "quantity": 15},
+        {"name": "Fresh Veggie Bundle", "description": "Tomatoes, peppers, onions and greens. Great for cooking tonight!", "original_price": 200, "discounted_price": 80, "quantity": 10},
+    ],
+]
+
+async def _seed_demo_vendor_user():
     vendor_user_id = f"user_{uuid.uuid4().hex[:12]}"
     await db.users.update_one(
         {"email": "vendor@demo.com"},
         {"$set": {
-            "user_id": vendor_user_id,
-            "email": "vendor@demo.com",
-            "name": "Demo Vendor",
-            "password_hash": hash_password("vendor123"),
-            "role": "vendor",
-            "picture": None,
-            "location": None,
-            "created_at": datetime.now(timezone.utc).isoformat()
+            "user_id": vendor_user_id, "email": "vendor@demo.com", "name": "Demo Vendor",
+            "password_hash": hash_password("vendor123"), "role": "vendor",
+            "picture": None, "location": None, "created_at": datetime.now(timezone.utc).isoformat()
         }},
         upsert=True
     )
+    return vendor_user_id
 
-    demo_vendors = [
-        {"name": "Green Leaf Bakery", "category": "Bakery", "location": {"lat": 28.6139, "lon": 77.2090, "address": "Connaught Place, Delhi"}},
-        {"name": "Spice Garden", "category": "Restaurant", "location": {"lat": 28.6280, "lon": 77.2197, "address": "Karol Bagh, Delhi"}},
-        {"name": "Fresh Bowl Cafe", "category": "Cafe", "location": {"lat": 28.5355, "lon": 77.2100, "address": "Saket, Delhi"}},
-        {"name": "Daily Grocers", "category": "Grocery Store", "location": {"lat": 28.6448, "lon": 77.2167, "address": "Rajender Nagar, Delhi"}},
-    ]
+async def _seed_vendor_with_drops(vendor_data, drops, vendor_user_id, pickup_start, pickup_end, vendor_idx):
+    vendor_id = f"vendor_{uuid.uuid4().hex[:12]}"
+    await db.vendors.insert_one({
+        "vendor_id": vendor_id, "user_id": vendor_user_id,
+        "name": vendor_data["name"], "location": vendor_data["location"],
+        "category": vendor_data["category"], "created_at": datetime.now(timezone.utc).isoformat()
+    })
+    for drop_idx, drop_data in enumerate(drops):
+        item_id = f"item_{uuid.uuid4().hex[:12]}"
+        menu_item_id = f"menu_{uuid.uuid4().hex[:12]}"
+        img_url = DEMO_IMAGE_URLS[(vendor_idx * 2 + drop_idx) % len(DEMO_IMAGE_URLS)]
 
-    image_urls = [
-        "https://images.unsplash.com/photo-1763207291707-e2cf471ed72b?w=600&h=400&fit=crop",
-        "https://images.unsplash.com/photo-1632898657999-ae6920976661?w=600&h=400&fit=crop",
-        "https://images.unsplash.com/photo-1636425732174-8700a53e8dd4?w=600&h=400&fit=crop",
-        "https://images.unsplash.com/photo-1662714208483-3480ccd2de39?w=600&h=400&fit=crop",
-    ]
+        await db.menu_items.insert_one({
+            "menu_item_id": menu_item_id, "vendor_id": vendor_id,
+            "name": drop_data["name"], "description": drop_data["description"],
+            "original_price": drop_data["original_price"], "image_url": img_url,
+            "is_active": True, "created_at": datetime.now(timezone.utc).isoformat()
+        })
+        await db.food_items.insert_one({
+            "item_id": item_id, "vendor_id": vendor_id, "menu_item_id": menu_item_id,
+            "name": drop_data["name"], "description": drop_data["description"],
+            "original_price": drop_data["original_price"], "discounted_price": drop_data["discounted_price"],
+            "quantity_available": drop_data["quantity"],
+            "pickup_start_time": pickup_start, "pickup_end_time": pickup_end,
+            "image_url": img_url, "is_active": True, "created_at": datetime.now(timezone.utc).isoformat()
+        })
 
+async def seed_demo_data():
+    """Seed dummy vendors and food items for testing."""
+    if await db.vendors.count_documents({}) > 0:
+        logger.info("Demo data already exists, skipping seed")
+        return
+
+    vendor_user_id = await _seed_demo_vendor_user()
     now = datetime.now(timezone.utc)
     pickup_start = (now + timedelta(hours=1)).strftime("%H:%M")
     pickup_end = (now + timedelta(hours=4)).strftime("%H:%M")
 
-    demo_drops = [
-        # Bakery items
-        [
-            {"name": "Artisan Croissants (6-pack)", "description": "Freshly baked buttery croissants. Baked this morning, perfectly good for today!", "original_price": 300, "discounted_price": 120, "quantity": 8},
-            {"name": "Sourdough Bread Loaf", "description": "Rustic sourdough loaf with crispy crust. Made fresh daily, grab before closing!", "original_price": 250, "discounted_price": 100, "quantity": 5},
-        ],
-        # Restaurant items
-        [
-            {"name": "Butter Chicken Thali", "description": "Full thali with butter chicken, dal, rice, naan and salad. Made for dinner rush!", "original_price": 350, "discounted_price": 150, "quantity": 12},
-            {"name": "Paneer Tikka Wrap (2 pcs)", "description": "Smoky paneer tikka in fresh wraps. Surplus from today's lunch prep.", "original_price": 220, "discounted_price": 90, "quantity": 6},
-        ],
-        # Cafe items
-        [
-            {"name": "Mixed Salad Bowl", "description": "Fresh garden salad with quinoa, avocado and citrus dressing. Prepared this afternoon.", "original_price": 280, "discounted_price": 110, "quantity": 7},
-            {"name": "Fruit Smoothie Pack (3 cups)", "description": "Mango, berry and green smoothies. Made fresh, best enjoyed today!", "original_price": 450, "discounted_price": 180, "quantity": 4},
-        ],
-        # Grocery items
-        [
-            {"name": "Seasonal Fruit Box (2kg)", "description": "Mix of apples, bananas and oranges. Perfectly ripe, need to go today!", "original_price": 400, "discounted_price": 160, "quantity": 15},
-            {"name": "Fresh Veggie Bundle", "description": "Tomatoes, peppers, onions and greens. Great for cooking tonight!", "original_price": 200, "discounted_price": 80, "quantity": 10},
-        ],
-    ]
-
-    for idx, vendor_data in enumerate(demo_vendors):
-        vendor_id = f"vendor_{uuid.uuid4().hex[:12]}"
-        await db.vendors.insert_one({
-            "vendor_id": vendor_id,
-            "user_id": vendor_user_id,
-            "name": vendor_data["name"],
-            "location": vendor_data["location"],
-            "category": vendor_data["category"],
-            "created_at": datetime.now(timezone.utc).isoformat()
-        })
-
-        for drop_idx, drop_data in enumerate(demo_drops[idx]):
-            item_id = f"item_{uuid.uuid4().hex[:12]}"
-            menu_item_id = f"menu_{uuid.uuid4().hex[:12]}"
-            img_index = (idx * 2 + drop_idx) % len(image_urls)
-
-            # Create menu item first
-            await db.menu_items.insert_one({
-                "menu_item_id": menu_item_id,
-                "vendor_id": vendor_id,
-                "name": drop_data["name"],
-                "description": drop_data["description"],
-                "original_price": drop_data["original_price"],
-                "image_url": image_urls[img_index],
-                "is_active": True,
-                "created_at": datetime.now(timezone.utc).isoformat()
-            })
-
-            # Create food item (drop) linked to menu item
-            await db.food_items.insert_one({
-                "item_id": item_id,
-                "vendor_id": vendor_id,
-                "menu_item_id": menu_item_id,
-                "name": drop_data["name"],
-                "description": drop_data["description"],
-                "original_price": drop_data["original_price"],
-                "discounted_price": drop_data["discounted_price"],
-                "quantity_available": drop_data["quantity"],
-                "pickup_start_time": pickup_start,
-                "pickup_end_time": pickup_end,
-                "image_url": image_urls[img_index],
-                "is_active": True,
-                "created_at": datetime.now(timezone.utc).isoformat()
-            })
+    for idx, vendor_data in enumerate(DEMO_VENDORS):
+        await _seed_vendor_with_drops(vendor_data, DEMO_DROPS[idx], vendor_user_id, pickup_start, pickup_end, idx)
 
     logger.info("Demo data seeded: 4 vendors, 8 food drops")
 
